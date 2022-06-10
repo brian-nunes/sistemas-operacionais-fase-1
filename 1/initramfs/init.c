@@ -1,11 +1,4 @@
-// init.c: roda ao inicializar o kernel (em modo usuário)
-
-#include "hello_world.h"
-#include "last_scno.h"
-#include "stack.h"
-
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,13 +7,21 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <time.h>
+#include "stop.h"
 
-void panic(const char *msg){
-	fprintf(stderr, "%s: %s (errno = %d)\n", msg,
-										strerror(errno), errno);
+#define len(_arr) ((int)((&_arr)[1] - _arr))
+
+static const char * const programs[] = { "/block_test" };
+
+void panic(const char *msg)
+{
+	fprintf(stderr, "%s: %s (errno = %d)\n", msg, strerror(errno), errno);
 	exit(-1);
 }
-void mount_fs(){
+
+void mount_fs()
+{
 	printf("Mounting filesystems\n");
 	// If /sys is not created, make it read-only (mode = 444)
 	if (mkdir("/sys", 0x124) && errno != EEXIST)
@@ -29,43 +30,55 @@ void mount_fs(){
 		panic("mount");
 }
 
-int main(){
-	mount_fs(); // monta o sysfs em /sys
+int main()
+{
+	printf("Custom initramfs - Blocking and Unblocking Process:\n");
+	mount_fs();
 
-	hello_world(); // scno de hello_world = 400
-	printf("last system call number = %lu\n", last_scno());
+	printf("Forking to run %d programs\n", len(programs));
 
-	stack_push(5); // scno de stack_push = 398
-	printf("last system call number = %lu\n", last_scno());
+	pid_t pid_A = fork();
+	if (pid_A == -1) {
+		perror("fork");
+		return -1;
+	} else if (pid_A) {
+		pid_t pid_B = fork();
+		if (pid_B == -1) {
+			perror("fork");
+			return -1;
+		} else if (pid_B) {
+			const struct timespec ts = {.tv_sec = 2, .tv_nsec = 0 };
+			nanosleep(&ts, NULL);
 
-	stack_pop(); // scno de stack_pop = 399
-	printf("last system call number = %lu\n", last_scno());
+			while(1) {
+				stop_process(pid_A);
+				nanosleep(&ts, NULL);
+				continue_process();
+				nanosleep(&ts, NULL);
 
-	int fd = open("/sys/kernel/sys_last_nr/last_nr", O_RDONLY);
-	// scno de open = 5
-	printf("last system call number = %lu\n", last_scno());
-
-	char filc[5];
-	if (lseek(fd, 0, SEEK_SET)) {
-		perror("can’t lseek");
-	} else {
-		int size = read(fd, filc, 4);
-		if (size < 0) {
-			perror("can’t read");
+				stop_process(pid_B);
+				nanosleep(&ts, NULL);
+				continue_process();
+				nanosleep(&ts, NULL);
+			}
 		} else {
-			printf("last system call number from sys dir = %s\n",
-															filc);
-
-			// scno de read = 3
+			for (int i = 0;;i++) {
+				printf("2\n");
+				const struct timespec ts = {.tv_sec = 0, .tv_nsec = 5e8 };
+				
+				nanosleep(&ts, NULL);
+			}
+		}
+	} else {
+		for (;;) {
+			printf("1\n");
+			const struct timespec ts = {.tv_sec = 0, .tv_nsec = 5e8 };
+			nanosleep(&ts, NULL);
 		}
 	}
-
-	printf("last system call number = %lu\n", last_scno());
-	// scno de write = 4
-
-	for(;;){
-		sleep(1000); // continua executando o kernel
-	}
-	
+	printf("init finished\n");
+	for (;;)
+		sleep(1000);
 	return 0;
 }
+
